@@ -2,7 +2,7 @@
 
 Sistema de sincronización incremental de **Axur Digital Risk Protection** hacia **Google SecOps (Chronicle)**.
 
-Basado en `axur-elastic` — reutiliza el cliente de Axur, el gestor de tokens y el gestor de estado sin modificaciones. Reemplaza Elasticsearch por la Chronicle Ingestion API v1alpha.
+Basado en `axur-elastic` — reutiliza el cliente de Axur, el gestor de tokens y el gestor de estado sin modificaciones. Reemplaza Elasticsearch por feeds Webhook de Chronicle.
 
 ---
 
@@ -20,13 +20,12 @@ axur-secops/
 │   ├── transform/
 │   │   └── data_transformer.py     ← REESCRITO para SecOps (sin UDM, eso es el parser CBN)
 │   ├── storage/
-│   │   └── secops_client.py        ← NUEVO: cliente Chronicle Ingestion API v1alpha
-│   ├── orchestrator.py             ← ADAPTADO: ES → SecOps, dos log types
+│   │   └── secops_client.py        ← NUEVO: cliente Chronicle Webhook Feed + Ingestion API
+│   ├── orchestrator.py             ← ADAPTADO: ES → SecOps, dos log types, dos feeds
 │   └── main.py                     ← ADAPTADO: CLI con los mismos args + nuevos para SecOps
 ├── .env.example
 ├── requirements.txt
-├── Dockerfile
-└── docker-compose.yml
+└── README.md
 ```
 
 ---
@@ -38,14 +37,55 @@ axur-secops/
 | `AXUR_DRP_TICKETS_CUSTOM` | `tickets-api/tickets` | Nested: `{ticket, detection, snapshots, attachments}` |
 | `AXUR_DRP_CREDENTIALS_CUSTOM` | `exposure-api/credentials` | Plano: `{id, user, password, status, ...}` |
 
-Las estructuras son completamente distintas → dos parsers CBN separados → dos log types.
+Las estructuras son completamente distintas → dos parsers CBN separados → dos log types → **dos feeds independientes en SecOps UI**, cada uno con su propio `feed_id`, `api_key` y `webhook_secret`.
 
 ---
 
 ## Modos de autenticación con Google SecOps
 
-### Opción 1: Service Account desde archivo (`sa_file`)
-**Recomendado para producción con Secret Manager o volúmenes montados.**
+### Modo principal: Webhook Feed (`webhook`) ← Recomendado
+
+Cada evento se envía como un **POST individual** al endpoint del feed con el JSON plano en el body. Sin base64, sin wrapper. El log type está configurado en el feed de SecOps UI, no en el código.
+
+**Endpoint:**
+```
+https://{region}-chronicle.googleapis.com/v1alpha/projects/{project}/locations/{region}/instances/{instance}/feeds/{feed_id}:importPushLogs
+```
+
+**Headers por request:**
+```
+Content-Type: application/json
+X-goog-api-key: <api_key del feed>
+X-Webhook-Access-Key: <webhook_secret del feed>
+```
+
+**Pre-requisitos:**
+1. En SecOps UI → Settings → Feeds → Add Feed → HTTPS Webhook
+2. Crear **Feed 1**: Log Type = `AXUR_DRP_TICKETS_CUSTOM` → copiar Feed ID, API Key y Webhook Secret
+3. Crear **Feed 2**: Log Type = `AXUR_DRP_CREDENTIALS_CUSTOM` → copiar Feed ID, API Key y Webhook Secret
+4. Cada feed genera su propio par único de credenciales — **no reutilizar entre feeds**
+
+**Variables de entorno:**
+```bash
+CHRONICLE_AUTH_MODE=webhook
+CHRONICLE_PROJECT_ID=my-gcp-project
+CHRONICLE_REGION=us
+CHRONICLE_INSTANCE_ID=00000000-0000-0000-0000-000000000000
+
+# Feed de tickets (credenciales propias)
+CHRONICLE_TICKETS_FEED_ID=00000000-0000-0000-0000-000000000000
+CHRONICLE_TICKETS_API_KEY=AIzaSy...
+CHRONICLE_TICKETS_WEBHOOK_SECRET=abc123...
+
+# Feed de credentials (credenciales propias, distintas a las de tickets)
+CHRONICLE_CREDS_FEED_ID=00000000-0000-0000-0000-111111111111
+CHRONICLE_CREDS_API_KEY=AIzaSy...
+CHRONICLE_CREDS_WEBHOOK_SECRET=xyz789...
+```
+
+---
+
+### Alternativa: Service Account desde archivo (`sa_file`)
 
 ```bash
 CHRONICLE_AUTH_MODE=sa_file
@@ -66,31 +106,12 @@ Pre-requisitos:
      -d '{"displayName": "axur-secops"}'
    ```
 
-### Opción 2: Service Account desde env var (`sa_env`)
-**Ideal para Cloud Run donde no se montan archivos.**
+### Alternativa: Service Account desde env var (`sa_env`)
 
 ```bash
 CHRONICLE_AUTH_MODE=sa_env
-# Codificar el JSON en base64:
 CHRONICLE_SA_KEY_JSON=$(base64 -w0 chronicle-sa-key.json)
 CHRONICLE_FORWARDER_ID=uuid-del-forwarder
-```
-
-### Opción 3: Webhook Feed (`webhook`)
-**Para usar los feeds HTTPS de SecOps sin SA. Más simple pero menos control.**
-
-Pre-requisitos:
-1. En SecOps UI → Settings → Feeds → Add Feed → HTTPS Webhook
-2. Crear Feed 1: Log Type = `AXUR_DRP_TICKETS_CUSTOM`
-3. Crear Feed 2: Log Type = `AXUR_DRP_CREDENTIALS_CUSTOM`
-4. Copiar el Feed ID, API Key y Webhook Secret de cada feed.
-
-```bash
-CHRONICLE_AUTH_MODE=webhook
-CHRONICLE_TICKETS_FEED_ID=uuid-feed-tickets
-CHRONICLE_CREDS_FEED_ID=uuid-feed-credentials
-CHRONICLE_API_KEY=AIza...
-CHRONICLE_WEBHOOK_SECRET=abc123...
 ```
 
 ---
@@ -138,6 +159,8 @@ docker compose run --rm axur-secops --mode all --full-sync
 
 ### Cloud Run Job (producción)
 
+Con modo webhook no se necesita Service Account ni montar archivos — solo las variables de entorno de los feeds:
+
 ```bash
 # Build y push
 gcloud builds submit --tag gcr.io/PROJECT_ID/axur-secops
@@ -146,16 +169,15 @@ gcloud builds submit --tag gcr.io/PROJECT_ID/axur-secops
 gcloud run jobs create axur-secops \
   --image gcr.io/PROJECT_ID/axur-secops \
   --region us-central1 \
-  --service-account axur-secops-ingest@PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars "CHRONICLE_AUTH_MODE=sa_env" \
-  --set-secrets "CHRONICLE_SA_KEY_JSON=chronicle-sa-json:latest,AXUR_API_KEY=axur-api-key:latest" \
+  --set-env-vars "CHRONICLE_AUTH_MODE=webhook,CHRONICLE_PROJECT_ID=PROJECT_ID,CHRONICLE_REGION=us,CHRONICLE_INSTANCE_ID=INSTANCE_UUID" \
+  --set-secrets "AXUR_API_KEY=axur-api-key:latest,CHRONICLE_TICKETS_FEED_ID=chronicle-tickets-feed-id:latest,CHRONICLE_TICKETS_API_KEY=chronicle-tickets-api-key:latest,CHRONICLE_TICKETS_WEBHOOK_SECRET=chronicle-tickets-webhook-secret:latest,CHRONICLE_CREDS_FEED_ID=chronicle-creds-feed-id:latest,CHRONICLE_CREDS_API_KEY=chronicle-creds-api-key:latest,CHRONICLE_CREDS_WEBHOOK_SECRET=chronicle-creds-webhook-secret:latest" \
   --args="--mode,all"
 
 # Programar ejecución cada 5 minutos con Cloud Scheduler
 gcloud scheduler jobs create http axur-secops-schedule \
   --schedule="*/5 * * * *" \
   --uri="https://us-central1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/PROJECT_ID/jobs/axur-secops:run" \
-  --oauth-service-account-email=axur-secops-ingest@PROJECT_ID.iam.gserviceaccount.com
+  --oauth-service-account-email=PROJECT_SA@PROJECT_ID.iam.gserviceaccount.com
 ```
 
 ---
@@ -180,7 +202,7 @@ python -m src.main [opciones]
 
 ## Parser CBN en Google SecOps
 
-Los log types deben existir en SecOps antes de ingestar. Crearlos:
+Los log types deben existir en SecOps antes de ingestar:
 1. SIEM Settings → Available Log Types → Create a custom log type
 2. Nombre: `AXUR_DRP_TICKETS` → SecOps agrega `_CUSTOM` automáticamente
 3. Repetir para `AXUR_DRP_CREDENTIALS`
