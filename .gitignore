@@ -49,3 +49,6 @@ tests/fixtures/*.zip
 tests/fixtures/*.xlm
 
 temp/
+
+# Logs
+sync.log
