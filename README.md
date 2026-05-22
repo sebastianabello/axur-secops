@@ -148,6 +148,23 @@ python -m src.main --status
 
 ---
 
+## Automatización con Cron
+
+Para sincronización periódica, agregar a crontab:
+dar permisos de ejecucion al archivo **sync.sh**
+
+chmod +x sync.sh
+
+```bash
+# Sincronizar cada hora
+0 * * * * cd /home/**/**/axur-secops && ./sync.sh --mode all >> sync.log 2>&1
+
+# Sincronizar cada 15 minutos
+*/15 * * * * cd /home/**/**/axur-secops && ./sync.sh --mode all >> sync.log 2>&1
+```
+
+---
+
 ## Referencia de argumentos CLI
 
 ```
