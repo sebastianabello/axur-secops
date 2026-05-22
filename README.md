@@ -121,6 +121,11 @@ CHRONICLE_FORWARDER_ID=uuid-del-forwarder
 ### Local (desarrollo)
 
 ```bash
+# 0. Creacion de entorno
+python3 -m venv .venv
+# activarla
+source .venv/bin/activate
+
 # 1. Clonar y configurar
 cp .env.example .env
 # Editar .env con tus valores
@@ -139,45 +144,6 @@ python -m src.main --mode all
 
 # 6. Ver estado
 python -m src.main --status
-```
-
-### Docker
-
-```bash
-# Build
-docker build -t axur-secops .
-
-# Ejecutar (modo all, variables desde .env)
-docker compose up axur-secops
-
-# Prueba solo tickets
-docker compose run --rm axur-secops --mode tickets --max-pages 1
-
-# Full sync (ignorar estado incremental)
-docker compose run --rm axur-secops --mode all --full-sync
-```
-
-### Cloud Run Job (producción)
-
-Con modo webhook no se necesita Service Account ni montar archivos — solo las variables de entorno de los feeds:
-
-```bash
-# Build y push
-gcloud builds submit --tag gcr.io/PROJECT_ID/axur-secops
-
-# Crear el job
-gcloud run jobs create axur-secops \
-  --image gcr.io/PROJECT_ID/axur-secops \
-  --region us-central1 \
-  --set-env-vars "CHRONICLE_AUTH_MODE=webhook,CHRONICLE_PROJECT_ID=PROJECT_ID,CHRONICLE_REGION=us,CHRONICLE_INSTANCE_ID=INSTANCE_UUID" \
-  --set-secrets "AXUR_API_KEY=axur-api-key:latest,CHRONICLE_TICKETS_FEED_ID=chronicle-tickets-feed-id:latest,CHRONICLE_TICKETS_API_KEY=chronicle-tickets-api-key:latest,CHRONICLE_TICKETS_WEBHOOK_SECRET=chronicle-tickets-webhook-secret:latest,CHRONICLE_CREDS_FEED_ID=chronicle-creds-feed-id:latest,CHRONICLE_CREDS_API_KEY=chronicle-creds-api-key:latest,CHRONICLE_CREDS_WEBHOOK_SECRET=chronicle-creds-webhook-secret:latest" \
-  --args="--mode,all"
-
-# Programar ejecución cada 5 minutos con Cloud Scheduler
-gcloud scheduler jobs create http axur-secops-schedule \
-  --schedule="*/5 * * * *" \
-  --uri="https://us-central1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/PROJECT_ID/jobs/axur-secops:run" \
-  --oauth-service-account-email=PROJECT_SA@PROJECT_ID.iam.gserviceaccount.com
 ```
 
 ---
