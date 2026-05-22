@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Ruff / Black cache
+.ruff_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Knowledge base generated files (keep raw/, ignore generated parquet)
+knowledge_base/*.parquet
+
+tests/fixtures/*.csv
+tests/fixtures/*.xlsx
+tests/fixtures/*.gz
+tests/fixtures/*.zip
+tests/fixtures/*.xlm
+
+temp/
